@@ -4,8 +4,9 @@ import (
 	"log"
 	"log/slog"
 
-	"github.com/luponetn/lexpay/internals/config"
-	"github.com/luponetn/lexpay/internals/logger"
+	"github.com/luponetn/lexpay/internal/config"
+	"github.com/luponetn/lexpay/internal/db"
+	"github.com/luponetn/lexpay/pkg/logger"
 )
 
 func main() {
@@ -24,9 +25,20 @@ func main() {
 		slog.String("port", cfg.Port),
 	)
 
+	//create db conn
+	connPool, err := db.ConnectDB(cfg.DatabaseURL)
+	if err != nil {
+		slog.Error("Failed to connect to database", "error", err)
+		return
+	}
+
+	defer connPool.Close()
+
+	queries := db.New(connPool)
+
 	//create router & start server
 	router := CreateRouter()
-	SetupRoutes(router)
+	SetupRoutesAndServices(router, queries)
 	StartServer(router, cfg.Port)
 
 }

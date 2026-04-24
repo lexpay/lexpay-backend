@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/luponetn/lexpay/internal/auth"
+	"github.com/luponetn/lexpay/internal/db"
 )
 
 func CreateRouter() *gin.Engine {
@@ -20,8 +22,15 @@ func CreateRouter() *gin.Engine {
 	return router
 }
 
-func SetupRoutes(router *gin.Engine) {
-	
+func SetupRoutesAndServices(router *gin.Engine, queries *db.Queries) {
+	//setup services
+	authService := auth.NewService(queries)
+
+	//setup handlers
+	authHandler := auth.NewHandler(authService)
+
+	//register routes
+	auth.RegisterRoutes(router, authHandler)
 
 }
 
