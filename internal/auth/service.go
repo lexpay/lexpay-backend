@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/luponetn/lexpay/internal/db"
@@ -25,15 +26,14 @@ func NewService(repo db.Querier) Svc {
 	return &Service{repo: repo}
 }
 
-//custom errors
 var (
 	ErrUserAlreadyExists  = errors.New("user already exists")
 	ErrInvalidCredentials = errors.New("invalid email or password")
 	ErrInvalidToken       = errors.New("invalid or expired token")
 )
 
-//implement auth services
 func (s *Service) SignUp(ctx context.Context, arg db.CreateUserOnSignupParams) (db.Users, error) {
+	arg.Email = strings.ToLower(strings.TrimSpace(arg.Email))
 	_, err := s.repo.FindUserByEmail(ctx, arg.Email)
 	if err == nil {
 		slog.Error("user already exists", "email", arg.Email)
@@ -44,7 +44,6 @@ func (s *Service) SignUp(ctx context.Context, arg db.CreateUserOnSignupParams) (
 		return db.Users{}, err
 	}
 
-	// Hash password before saving
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(arg.PasswordHash), bcrypt.DefaultCost)
 	if err != nil {
 		slog.Error("failed to hash password", "error", err)
@@ -56,6 +55,7 @@ func (s *Service) SignUp(ctx context.Context, arg db.CreateUserOnSignupParams) (
 }
 
 func (s *Service) SignIn(ctx context.Context, email, password string) (*utils.TokenPair, error) {
+	email = strings.ToLower(strings.TrimSpace(email))
 	user, err := s.repo.FindUserByEmail(ctx, email)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -79,42 +79,28 @@ func (s *Service) SignIn(ctx context.Context, email, password string) (*utils.To
 	return tokens, nil
 }
 
-// RefreshToken validates an existing refresh token, looks up the user to make
-// sure they still exist, and issues a brand-new token pair.
 func (s *Service) RefreshToken(ctx context.Context, refreshTokenString string) (*utils.TokenPair, error) {
 	claims, err := utils.VerifyRefreshToken(refreshTokenString)
 	if err != nil {
 		return nil, ErrInvalidToken
 	}
 
-	// Ensure this is actually a refresh token, not an access token
 	tokenType, _ := claims["type"].(string)
 	if tokenType != "refresh" {
 		return nil, ErrInvalidToken
 	}
 
-	// Extract the user ID from the claims
-	userIDRaw, ok := claims["userid"]
+	userID, ok := claims["userid"]
 	if !ok {
 		return nil, ErrInvalidToken
 	}
 
-	// The user ID was serialised as a pgtype.UUID which marshals to JSON as a string.
-	userIDStr, ok := userIDRaw.(string)
-	if !ok {
+	email, _ := claims["email"].(string)
+	if email == "" {
 		return nil, ErrInvalidToken
 	}
 
-	// Look up the user by email using their ID is not possible with the
-	// current queries, so we need to find them by email. However, the refresh
-	// token intentionally does NOT carry the email. We will query by ID.
-	// For now, we use FindUserByEmail indirectly — we should add a FindUserByID
-	// query. As a workaround, we'll decode the UUID and pass it through.
-	//
-	// Since we already verified the token signature and expiry, we can trust
-	// the claims and just issue new tokens. The user ID is already validated
-	// cryptographically by the JWT signature.
-	tokens, err := utils.GenerateTokenPair(userIDStr, "")
+	tokens, err := utils.GenerateTokenPair(userID, email)
 	if err != nil {
 		slog.Error("failed to generate token pair on refresh", "error", err)
 		return nil, err
@@ -122,3 +108,4 @@ func (s *Service) RefreshToken(ctx context.Context, refreshTokenString string) (
 
 	return tokens, nil
 }
+

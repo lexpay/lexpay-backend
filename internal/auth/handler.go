@@ -4,10 +4,12 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"os"
 
 	"github.com/gin-gonic/gin"
 	pgtype "github.com/jackc/pgx/v5/pgtype"
 	"github.com/luponetn/lexpay/internal/db"
+	"github.com/luponetn/lexpay/internal/middleware"
 	"github.com/luponetn/lexpay/internal/utils"
 )
 
@@ -64,7 +66,12 @@ func (h *Handler) HandleSignUp(c *gin.Context) {
 	c.JSON(http.StatusCreated, gin.H{
 		"status":  "success",
 		"message": "user created successfully",
-		"data":    user,
+		"data": gin.H{
+			"id":          user.ID,
+			"name":        user.Name,
+			"email":       user.Email,
+			"nationality": user.Nationality,
+		},
 	})
 }
 
@@ -96,14 +103,10 @@ func (h *Handler) HandleSignIn(c *gin.Context) {
 		return
 	}
 
-	// Set access token cookie — short-lived (20 minutes)
-	// HttpOnly: true prevents JavaScript from reading it (XSS protection)
-	// Secure: set to true in production so it is only sent over HTTPS
-	c.SetCookie("access_token", tokens.AccessToken, int(utils.AccessTokenDuration.Seconds()), "/", "", false, true)
-
-	// Set refresh token cookie — long-lived (7 days)
-	// Path is restricted to /auth/refresh so it is only sent when refreshing
-	c.SetCookie("refresh_token", tokens.RefreshToken, int(utils.RefreshTokenDuration.Seconds()), "/auth/refresh", "", false, true)
+	isProd := os.Getenv("ENV") == "production"
+	c.SetSameSite(http.SameSiteStrictMode)
+	c.SetCookie("access_token", tokens.AccessToken, int(utils.AccessTokenDuration.Seconds()), "/", "", isProd, true)
+	c.SetCookie("refresh_token", tokens.RefreshToken, int(utils.RefreshTokenDuration.Seconds()), "/auth/refresh", "", isProd, true)
 
 	c.JSON(http.StatusOK, gin.H{
 		"status":  "success",
@@ -111,8 +114,6 @@ func (h *Handler) HandleSignIn(c *gin.Context) {
 	})
 }
 
-// HandleRefreshToken reads the refresh token from the cookie, validates it,
-// and issues a brand-new access + refresh token pair.
 func (h *Handler) HandleRefreshToken(c *gin.Context) {
 	refreshToken, err := c.Cookie("refresh_token")
 	if err != nil {
@@ -128,7 +129,7 @@ func (h *Handler) HandleRefreshToken(c *gin.Context) {
 		if errors.Is(err, ErrInvalidToken) {
 			c.JSON(http.StatusUnauthorized, gin.H{
 				"status":  "failed",
-				"message": "invalid or expired refresh token",
+				"message": "invalid or expired refresh token, please login again",
 			})
 			return
 		}
@@ -140,14 +141,44 @@ func (h *Handler) HandleRefreshToken(c *gin.Context) {
 		return
 	}
 
-	// Set the new access token cookie
-	c.SetCookie("access_token", tokens.AccessToken, int(utils.AccessTokenDuration.Seconds()), "/", "", false, true)
-
-	// Set the new refresh token cookie (token rotation)
-	c.SetCookie("refresh_token", tokens.RefreshToken, int(utils.RefreshTokenDuration.Seconds()), "/auth/refresh", "", false, true)
+	isProd := os.Getenv("ENV") == "production"
+	c.SetSameSite(http.SameSiteStrictMode)
+	c.SetCookie("access_token", tokens.AccessToken, int(utils.AccessTokenDuration.Seconds()), "/", "", isProd, true)
+	c.SetCookie("refresh_token", tokens.RefreshToken, int(utils.RefreshTokenDuration.Seconds()), "/auth/refresh", "", isProd, true)
 
 	c.JSON(http.StatusOK, gin.H{
 		"status":  "success",
 		"message": "tokens refreshed successfully",
+	})
+}
+
+func (h *Handler) HandleLogout(c *gin.Context) {
+	isProd := os.Getenv("ENV") == "production"
+	c.SetSameSite(http.SameSiteStrictMode)
+	c.SetCookie("access_token", "", -1, "/", "", isProd, true)
+	c.SetCookie("refresh_token", "", -1, "/auth/refresh", "", isProd, true)
+
+	c.JSON(http.StatusOK, gin.H{
+		"status":  "success",
+		"message": "logged out successfully",
+	})
+}
+
+func (h *Handler) HandleMe(c *gin.Context) {
+	userID, email, err := middleware.GetUserFromContext(c)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"status":  "failed",
+			"message": "unauthorized",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"status": "success",
+		"data": gin.H{
+			"userid": userID,
+			"email":  email,
+		},
 	})
 }
